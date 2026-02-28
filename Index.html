@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>UKSF Prep Tracker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: -apple-system;
+      background: #000;
+      color: #fff;
+      padding: 20px;
+    }
+    input, select, button {
+      width: 100%;
+      padding: 14px;
+      margin: 6px 0;
+      border-radius: 8px;
+      border: none;
+      font-size: 16px;
+    }
+    input, select { background: #1c1c1e; color: white; }
+    button { background: #1db954; font-weight: bold; }
+    .card { background: #1c1c1e; padding: 12px; border-radius: 10px; margin-top: 10px; }
+    .warning { background: #8b0000; padding: 10px; margin-top: 10px; border-radius: 8px; }
+    .deload { background: #cc5500; padding: 10px; margin-top: 10px; border-radius: 8px; }
+    canvas { background: #fff; border-radius: 8px; margin-top: 15px; }
+  </style>
+</head>
+
+<body>
+
+<h2>UKSF Selection Prep</h2>
+
+<input type="date" id="date">
+
+<select id="type" onchange="updateInputs()">
+  <option>Run</option>
+  <option>Ruck</option>
+  <option>Hill</option>
+  <option>Strength</option>
+  <option>Recovery</option>
+</select>
+
+<!-- Dynamic Inputs -->
+<div id="inputs">
+  <input type="number" id="distance" placeholder="Distance (km)">
+  <input type="number" id="load" placeholder="Load (kg)">
+  <input type="number" id="time" placeholder="Time (minutes)">
+  <input type="number" id="rpe" placeholder="RPE (1–10)">
+</div>
+
+<button onclick="addWorkout()">Add Session</button>
+
+<h3>Weekly Summary</h3>
+<div id="summary"></div>
+<div id="alerts"></div>
+
+<h3>Load Progression</h3>
+<canvas id="chart"></canvas>
+
+<script>
+let workouts = JSON.parse(localStorage.getItem("uksf_workouts")) || [];
+
+function updateInputs() {
+  const type = document.getElementById("type").value;
+  const container = document.getElementById("inputs");
+  
+  if(type === "Strength") {
+    container.innerHTML = `
+      <input type="text" id="exercise" placeholder="Exercise (e.g. Deadlift)">
+      <input type="number" id="weight" placeholder="Weight (kg)">
+      <input type="number" id="sets" placeholder="Sets">
+      <input type="number" id="reps" placeholder="Reps">
+      <input type="number" id="rpe" placeholder="RPE (1–10)">
+    `;
+  } else if(type === "Recovery") {
+    container.innerHTML = `<input type="text" id="notes" placeholder="Notes (Stretch, Swim, etc)">`;
+  } else {
+    container.innerHTML = `
+      <input type="number" id="distance" placeholder="Distance (km)">
+      <input type="number" id="load" placeholder="Load (kg)">
+      <input type="number" id="time" placeholder="Time (minutes)">
+      <input type="number" id="rpe" placeholder="RPE (1–10)">
+    `;
+  }
+}
+
+function addWorkout() {
+  const type = document.getElementById("type").value;
+  let workout = { date: document.getElementById("date").value, type };
+  
+  if(type === "Strength") {
+    workout.exercise = document.getElementById("exercise").value;
+    workout.weight = parseFloat(document.getElementById("weight").value) || 0;
+    workout.sets = parseInt(document.getElementById("sets").value) || 0;
+    workout.reps = parseInt(document.getElementById("reps").value) || 0;
+    workout.rpe = parseFloat(document.getElementById("rpe").value) || 0;
+  } else if(type === "Recovery") {
+    workout.notes = document.getElementById("notes").value;
+  } else {
+    workout.distance = parseFloat(document.getElementById("distance").value) || 0;
+    workout.load = parseFloat(document.getElementById("load").value) || 0;
+    workout.time = parseFloat(document.getElementById("time").value) || 0;
+    workout.rpe = parseFloat(document.getElementById("rpe").value) || 0;
+  }
+  
+  workouts.push(workout);
+  localStorage.setItem("uksf_workouts", JSON.stringify(workouts));
+  render();
+}
+
+function getWeekKey(dateStr) {
+  const d = new Date(dateStr);
+  const oneJan = new Date(d.getFullYear(),0,1);
+  const week = Math.ceil((((d - oneJan) / 86400000) + oneJan.getDay()+1)/7);
+  return `${d.getFullYear()}-W${week}`;
+}
+
+let chart;
+function render() {
+  const weekly = {};
+  workouts.forEach(w => {
+    if(w.date){
+      const week = getWeekKey(w.date);
+      if(!weekly[week]) weekly[week] = { km:0, loadedKm:0, loadScore:0 };
+      if(w.type !== "Strength" && w.type !== "Recovery") {
+        weekly[week].km += w.distance || 0;
+        if(w.type === "Ruck") {
+          weekly[week].loadedKm += w.distance || 0;
+          weekly[week].loadScore += (w.distance||0) * (w.load||0);
+        }
+      }
+    }
+  });
+
+  const weeks = Object.keys(weekly).sort();
+  const summary = document.getElementById("summary");
+  const alerts = document.getElementById("alerts");
+  summary.innerHTML = "";
+  alerts.innerHTML = "";
+
+  weeks.forEach((week,i)=>{
+    const w = weekly[week];
+    summary.innerHTML += `<div class="card">
+      <strong>${week}</strong><br>
+      Total KM: ${w.km.toFixed(1)}<br>
+      Loaded KM: ${w.loadedKm.toFixed(1)}
+    </div>`;
+    if((i+1)%4===0) alerts.innerHTML += `<div class="deload">Deload Week Recommended</div>`;
+    if(i>0){
+      const prev = weekly[weeks[i-1]].km;
+      const increase = ((w.km-prev)/prev)*100;
+      if(increase>15) alerts.innerHTML += `<div class="warning">Warning: >15% Mileage Increase</div>`;
+    }
+  });
+
+  renderChart(weeks.map(w=>weekly[w].loadScore), weeks);
+}
+
+function renderChart(data,labels){
+  const ctx = document.getElementById("chart").getContext("2d");
+  if(chart) chart.destroy();
+  chart = new Chart(ctx,{ type:'line', data:{ labels, datasets:[{ label:'Weekly Load (kg × km)', data, borderColor:'#1db954', fill:false }] } });
+}
+
+render();
+</script>
+</body>
+</html>
